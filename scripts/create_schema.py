@@ -1,11 +1,13 @@
 import sqlalchemy
+import os
 
-DB_URL = "mysql+pymysql://mlops_user:mlops_pass@127.0.0.1:3306/creditcard_db"
+MARIADB_HOST = os.getenv("MARIADB_HOST", "127.0.0.1")
+DB_URL = f"mysql+pymysql://mlops_user:mlops_pass@{MARIADB_HOST}:3306/creditcard_db"
 engine = sqlalchemy.create_engine(DB_URL)
 
 sql_statements = [
     "DROP TABLE IF EXISTS fact_credit_default",
-    "DROP TABLE IF EXISTS dim_client", 
+    "DROP TABLE IF EXISTS dim_client",
     "DROP TABLE IF EXISTS dim_repayment",
     """CREATE TABLE dim_client (
         client_id INT,
@@ -17,6 +19,8 @@ sql_statements = [
     """CREATE TABLE dim_repayment (
         repayment_id INT,
         PAY_0 INT,
+        PAY_2 INT,
+        PAY_3 INT,
         PAY_AMT1 FLOAT,
         PAY_AMT2 FLOAT
     ) ENGINE=Columnstore""",
@@ -25,13 +29,17 @@ sql_statements = [
         repayment_id INT,
         LIMIT_BAL FLOAT,
         BILL_AMT1 FLOAT,
+        BILL_AMT2 FLOAT,
         default_payment INT
     ) ENGINE=Columnstore"""
 ]
 
-with engine.connect() as conn:
+with engine.begin() as conn:
     for statement in sql_statements:
         conn.execute(sqlalchemy.text(statement))
-    conn.commit()
-
 print("Star schema created with ColumnStore engine successfully.")
+
+
+
+
+
