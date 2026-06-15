@@ -1,0 +1,93 @@
+services:
+  mariadb:
+    image: mariadb/columnstore:23.02.4
+    container_name: mlops_mariadb
+    hostname: mcs1
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1.5G
+    environment:
+      PM1: mcs1
+      ADMIN_USER: Admin
+      ADMIN_PASS: ${COLUMNSTORE_ADMIN_PASS}
+      CEJ_USER: cej
+      CEJ_PASS: ${COLUMNSTORE_CEJ_PASS}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - columnstore_data:/var/lib/columnstore
+    privileged: true
+    shm_size: 1gb
+    networks:
+      - mlops_net
+
+  redis:
+    image: redis:7
+    container_name: mlops_redis
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    ports:
+      - "6379:6379"
+    networks:
+      - mlops_net
+
+  airflow:
+    image: apache/airflow:2.10.0
+    container_name: mlops_airflow
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 3G
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    environment:
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      PIP_ROOT_USER_ACTION: ignore
+      _PIP_ADDITIONAL_REQUIREMENTS: 'xlrd pymysql sqlalchemy redis great-expectations==1.4.4 imbalanced-learn scikit-learn pandas mlflow fastapi uvicorn evidently==0.4.30 pydantic==2.9.2 pydantic-core==2.23.4'
+      REDIS_HOST: mlops_redis
+      MARIADB_HOST: mlops_mariadb
+      MLFLOW_TRACKING_URI: file:///opt/airflow/mlruns
+      MLFLOW_ALLOW_FILE_STORE: "true"
+      MODEL_DIR: /opt/airflow/models
+      REPORTS_DIR: /opt/airflow/data/reports
+      XLS_PATH: "/opt/airflow/data/default of credit card clients.xls"
+      AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC: "60"
+      AIRFLOW__SCHEDULER__JOB_HEARTBEAT_SEC: "60"
+      AIRFLOW__TASK__HEARTBEAT_TIMEOUT: "600"
+      AIRFLOW__CORE__KILLED_TASK_CLEANUP_TIME: "600"
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+    ports:
+      - "8080:8080"
+      - "5000:5000"
+    volumes:
+      - ../dags:/opt/airflow/dags
+      - ../scripts:/opt/airflow/scripts
+      - ../models:/opt/airflow/models
+      - ../data:/opt/airflow/data
+    command: bash -c "rm -f /opt/airflow/airflow-webserver.pid && airflow db migrate && airflow users create --username admin --password ${AIRFLOW_ADMIN_PASSWORD} --firstname Admin --lastname User --role Admin --email admin@example.com || true && airflow standalone"
+    networks:
+      - mlops_net
+
+networks:
+  mlops_net:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  columnstore_data:
