@@ -170,7 +170,7 @@ def fetch_prediction_history(limit=10):
 st.markdown("""
 <div class="title-block">
     <h1>💳 Credit Risk Predictor</h1>
-    <p>ML-powered default risk assessment — CMP5366 MLOps Pipeline</p>
+    <p>ML-powered default risk assessment</p>
 </div>
 """, unsafe_allow_html=True)
 
