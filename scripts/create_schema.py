@@ -38,8 +38,3 @@ with engine.begin() as conn:
     for statement in sql_statements:
         conn.execute(sqlalchemy.text(statement))
 print("Star schema created with ColumnStore engine successfully.")
-
-
-
-
-

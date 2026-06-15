@@ -1,3 +1,4 @@
+import great_expectations as gx
 import pandas as pd
 import pickle
 import redis
@@ -5,67 +6,72 @@ import os
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from imblearn.over_sampling import SMOTE
-import great_expectations as gx
 
 # --- Load from Redis ---
 print("Loading data from Redis...")
-r = redis.Redis(host="127.0.0.1", port=6379)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+r = redis.Redis(host=REDIS_HOST, port=6379)
 df = pickle.loads(r.get("raw_data"))
 print(f"Loaded from Redis: {df.shape}")
 
-# --- Great Expectations Validation ---
+# --- Great Expectations Validation (GE 1.4.4 Fluent API) ---
 print("Running Great Expectations validation...")
 context = gx.get_context(mode="ephemeral")
-ds = context.sources.add_pandas("pandas_source")
-da = ds.add_dataframe_asset("credit_data")
-batch = da.build_batch_request(dataframe=df)
-suite = context.add_expectation_suite("credit_suite")
+datasource = context.data_sources.add_pandas(name="credit_pandas_datasource")
+data_asset = datasource.add_dataframe_asset(name="credit_card_data")
+batch_definition = data_asset.add_batch_definition_whole_dataframe("full_batch")
+batch = batch_definition.get_batch(batch_parameters={"dataframe": df})
 
-validator = context.get_validator(
-    batch_request=batch,
-    expectation_suite=suite
+suite = context.suites.add(gx.ExpectationSuite(name="credit_card_suite"))
+suite.add_expectation(gx.expectations.ExpectColumnValuesToNotBeNull(column="default_payment"))
+suite.add_expectation(gx.expectations.ExpectColumnValuesToBeInSet(column="default_payment", value_set=[0, 1]))
+suite.add_expectation(gx.expectations.ExpectColumnValuesToBeInSet(column="SEX", value_set=[1, 2]))
+suite.add_expectation(gx.expectations.ExpectColumnValuesToBeInSet(column="EDUCATION", value_set=[0, 1, 2, 3, 4, 5, 6]))
+suite.add_expectation(gx.expectations.ExpectColumnValuesToBeInSet(column="MARRIAGE", value_set=[0, 1, 2, 3]))
+suite.add_expectation(gx.expectations.ExpectColumnValuesToBeBetween(column="AGE", min_value=18, max_value=100))
+suite.add_expectation(gx.expectations.ExpectColumnValuesToBeBetween(column="LIMIT_BAL", min_value=0))
+suite.add_expectation(gx.expectations.ExpectColumnValuesToNotBeNull(column="BILL_AMT1"))
+suite.add_expectation(gx.expectations.ExpectColumnValuesToBeBetween(column="PAY_AMT1", min_value=0))
+suite.add_expectation(gx.expectations.ExpectColumnValuesToBeBetween(column="PAY_0", min_value=-2, max_value=8))
+
+validation_definition = context.validation_definitions.add(
+    gx.ValidationDefinition(name="credit_validation", data=batch_definition, suite=suite)
 )
-
-validator.expect_column_values_to_not_be_null("default_payment")
-validator.expect_column_values_to_be_between("PAY_0", min_value=-2, max_value=8)
-validator.expect_column_values_to_be_between("LIMIT_BAL", min_value=0)
-validator.expect_column_values_to_be_in_set("default_payment", [0, 1])
-
-results = validator.validate()
-print(f"Validation passed: {results['success']}")
+result = validation_definition.run(batch_parameters={"dataframe": df})
+print("Validation success:", result.success)
+for res in result.results:
+    print(f"  {res.expectation_config.type} | Success: {res.success}")
 
 # --- Preprocessing ---
-df.drop(columns=["ID"], inplace=True)
-X = df.drop(columns=["default_payment"])
-y = df["default_payment"]
+print("Preprocessing data...")
+FEATURES = ["LIMIT_BAL", "AGE", "PAY_0", "PAY_2", "PAY_3",
+            "BILL_AMT1", "BILL_AMT2", "PAY_AMT1", "PAY_AMT2"]
+TARGET = "default_payment"
 
-print(f"Class distribution BEFORE SMOTE:\n{y.value_counts()}")
+X = df[FEATURES]
+y = df[TARGET]
 
-X_train, X_test, y_train, y_test = train_test_split(
+print("Splitting data before SMOTE...")
+X_train_raw, X_test_raw, y_train_raw, y_test_raw = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
+print(f"Train size before SMOTE: {X_train_raw.shape} | Test size: {X_test_raw.shape}")
 
+print("Applying SMOTE to training data only...")
+sm = SMOTE(random_state=42)
+X_train_res, y_train_res = sm.fit_resample(X_train_raw, y_train_raw)
+print(f"Train after SMOTE: {X_train_res.shape}")
+
+print("Scaling features...")
 scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+X_train_scaled = scaler.fit_transform(X_train_res)
+X_test_scaled = scaler.transform(X_test_raw)
 
-smote = SMOTE(random_state=42)
-X_train_res, y_train_res = smote.fit_resample(X_train_scaled, y_train)
-
-print(f"Class distribution AFTER SMOTE:\n{pd.Series(y_train_res).value_counts()}")
-
-# --- Save to disk ---
-os.makedirs("models", exist_ok=True)
-pickle.dump(scaler, open("models/scaler.pkl", "wb"))
-pickle.dump(X_train_res, open("models/X_train.pkl", "wb"))
-pickle.dump(X_test_scaled, open("models/X_test.pkl", "wb"))
-pickle.dump(y_train_res, open("models/y_train.pkl", "wb"))
-pickle.dump(y_test, open("models/y_test.pkl", "wb"))
-
-# --- Cache processed data to Redis ---
-r.set("X_train", pickle.dumps(X_train_res))
-r.set("y_train", pickle.dumps(y_train_res))
+print("Caching preprocessed data to Redis...")
+r.set("X_train", pickle.dumps(X_train_scaled))
 r.set("X_test", pickle.dumps(X_test_scaled))
-r.set("y_test", pickle.dumps(y_test))
-
-print("Preprocessing complete. Data cached to Redis.")
+r.set("y_train", pickle.dumps(y_train_res))
+r.set("y_test", pickle.dumps(y_test_raw))
+r.set("scaler", pickle.dumps(scaler))
+print("Preprocessing complete.")
+print(f"Final train: {X_train_scaled.shape} | Final test: {X_test_scaled.shape}")

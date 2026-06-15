@@ -14,7 +14,7 @@ default_args = {
 def check_recall_threshold(**context):
     """Pull latest recall from Redis. Retrain only if below 0.65."""
     r = redis.Redis(host="mlops_redis", port=6379)
-    val = r.get("latest_recall")
+    val = r.get("live_recall")
     if val is None:
         print("No recall found — triggering retrain.")
         return "model_training"
@@ -46,10 +46,6 @@ with DAG(
         task_id="model_training",
         bash_command="cd /opt/airflow && python3 scripts/train.py",
     )
-    monitor = BashOperator(
-        task_id="model_monitoring",
-        bash_command="cd /opt/airflow && python3 scripts/monitor.py",
-    )
     check_recall = BranchPythonOperator(
         task_id="check_recall_threshold",
         python_callable=check_recall_threshold,
@@ -61,15 +57,5 @@ with DAG(
     skip_training = EmptyOperator(
         task_id="skip_training",
     )
-    ingest >> preprocess >> train >> monitor >> check_recall >> [retrain, skip_training]
 
-
-
-
-
-
-
-
-
-
-    
+    ingest >> preprocess >> train >> check_recall >> [retrain, skip_training]
