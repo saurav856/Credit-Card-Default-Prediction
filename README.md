@@ -1,6 +1,8 @@
 # Credit Card Default Prediction — MLOps Pipeline
 
-End-to-end MLOps pipeline for automated credit card default prediction.  
+End-to-end MLOps pipeline for automated credit card default prediction.
+
+**Live demo:** https://credit-card-prediction.streamlit.app
 
 ## Dataset
 - **Primary:** UCI Default of Credit Card Clients (30,000 rows, 25 features)  
@@ -13,7 +15,7 @@ End-to-end MLOps pipeline for automated credit card default prediction.
 | 1 | Data ingestion: XLS → ETL → Great Expectations validation → MariaDB ColumnStore (Star Schema) |
 | 2 | Preprocessing: feature selection → train/test split → SMOTE → StandardScaler → Redis cache |
 | 3 | Training: Logistic Regression + Random Forest → MLflow tracking → Model Registry |
-| 4 | Serving: FastAPI `/predict` endpoint → Streamlit dashboard → PostgreSQL prediction logs |
+| 4 | Serving: FastAPI `/predict` endpoint (local) + standalone Streamlit dashboard (loads model directly for public deployment) |
 | 5 | Monitoring: Evidently drift reports → BranchPythonOperator → automated Airflow retrain trigger |
 
 ## Tech Stack
@@ -43,6 +45,7 @@ End-to-end MLOps pipeline for automated credit card default prediction.
 ├── dags/          # Airflow DAG
 ├── data/          
 ├── docker/        # Docker Compose config
+├── models/        # Trained model + scaler (used by standalone Streamlit app)
 ├── scripts/       # Pipeline scripts
 ├── .gitignore
 ├── requirements.txt
@@ -62,7 +65,7 @@ docker exec mlops_mariadb provision mcs1
 4. Start Airflow: `docker start mlops_airflow` → localhost:8080
 5. Start MLflow: `mlflow ui --host 0.0.0.0 --port 5000`
 6. Start API: `uvicorn api:app --reload`
-7. Start dashboard: `streamlit run app.py`
+7. Start dashboard: `streamlit run app.py` (local mode uses FastAPI; deployed version loads model directly — see live demo link above)
 
 ## Key Design Decisions
 - **Recall prioritised over accuracy** — class imbalance (78/22 split); false negatives costlier than false positives
