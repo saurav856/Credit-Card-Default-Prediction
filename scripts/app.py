@@ -215,7 +215,6 @@ st.markdown(f"""
 
 # --- Single column layout: form, then result below ---
 
-st.markdown('<div class="card">', unsafe_allow_html=True)
 st.markdown("#### Client Information")
 
 LIMIT_BAL = st.number_input("Credit Limit (NT$)", min_value=0, max_value=1000000, value=50000, step=5000)
@@ -238,7 +237,6 @@ BILL_AMT2 = st.number_input("Bill Amount — August (NT$)", value=3000, step=500
 PAY_AMT1 = st.number_input("Payment Made — September (NT$)", min_value=0, value=2000, step=500)
 PAY_AMT2 = st.number_input("Payment Made — August (NT$)", min_value=0, value=1500, step=500)
 
-st.markdown('</div>', unsafe_allow_html=True)
 predict_btn = st.button("Run Risk Assessment")
 
 st.markdown("<br>", unsafe_allow_html=True)
