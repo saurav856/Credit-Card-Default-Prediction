@@ -1,8 +1,6 @@
 import streamlit as st
-import requests
-import psycopg2
 import pandas as pd
-from datetime import datetime
+import pickle
 import os
 
 # --- Page config ---
@@ -45,14 +43,6 @@ st.markdown("""
         color: #999;
         font-size: 1.15rem;
         margin-top: 0.3rem;
-    }
-
-    .card {
-        background: #1a1d26;
-        border: 1px solid #2a2d3a;
-        border-radius: 12px;
-        padding: 1.8rem;
-        margin-bottom: 1.2rem;
     }
 
     h4 {
@@ -151,43 +141,34 @@ st.markdown("""
         border-radius: 8px !important;
     }
 
-    section[data-testid="stSidebar"] {
-        background-color: #13151f;
-    }
-
-    .log-table {
-        background: #1a1d26;
-        border-radius: 10px;
-        padding: 1rem;
-    }
     footer { visibility: hidden; }
     #MainMenu { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- API config ---
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+# --- Load model + scaler (cached so it only loads once) ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "..", "models", "best_model.pkl")
+SCALER_PATH = os.path.join(BASE_DIR, "..", "models", "scaler.pkl")
 
-def get_pg_conn():
-    return psycopg2.connect(
-        host=os.getenv("PG_HOST", "localhost"),
-        port=os.getenv("PG_PORT", 5432),
-        dbname=os.getenv("PG_DB", "mlops_logs"),
-        user=os.getenv("PG_USER", "mlops_user"),
-        password=os.getenv("PG_PASSWORD", "mlops_pass")
-    )
+@st.cache_resource
+def load_artifacts():
+    with open(MODEL_PATH, "rb") as f:
+        model = pickle.load(f)
+    with open(SCALER_PATH, "rb") as f:
+        scaler = pickle.load(f)
+    return model, scaler
 
-def fetch_prediction_history(limit=10):
-    try:
-        conn = get_pg_conn()
-        df = pd.read_sql(
-            f"SELECT timestamp, age, limit_bal, prediction, probability, risk FROM prediction_log ORDER BY timestamp DESC LIMIT {limit}",
-            conn
-        )
-        conn.close()
-        return df
-    except Exception as e:
-        return None
+try:
+    model, scaler = load_artifacts()
+    model_ok = True
+except Exception as e:
+    model_ok = False
+    load_error = str(e)
+
+FEATURES = ["LIMIT_BAL", "AGE", "PAY_0", "PAY_2", "PAY_3",
+            "BILL_AMT1", "BILL_AMT2", "PAY_AMT1", "PAY_AMT2"]
+THRESHOLD = 0.40
 
 # --- Header ---
 st.markdown("""
@@ -197,15 +178,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- API Status ---
-try:
-    status = requests.get(f"{API_URL}/status", timeout=3).json()
-    api_ok = status.get("status") == "available"
-except:
-    api_ok = False
-
-status_color = "#00cc66" if api_ok else "#ff4444"
-status_text = "API Online" if api_ok else "API Offline"
+status_color = "#00cc66" if model_ok else "#ff4444"
+status_text = "Model Loaded" if model_ok else "Model Failed to Load"
 st.markdown(f"""
 <div style="text-align:center; margin-bottom:1.5rem;">
     <span style="background:#1a1d26; border:1px solid {status_color}; color:{status_color};
@@ -213,8 +187,11 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# --- Single column layout: form, then result below ---
+if not model_ok:
+    st.error(f"Could not load model/scaler: {load_error}")
+    st.stop()
 
+# --- Form ---
 st.markdown("#### Client Information")
 
 LIMIT_BAL = st.number_input("Credit Limit (NT$)", min_value=0, max_value=1000000, value=50000, step=5000)
@@ -242,55 +219,53 @@ predict_btn = st.button("Run Risk Assessment")
 st.markdown("<br>", unsafe_allow_html=True)
 
 if predict_btn:
-    if not api_ok:
-        st.error("API is offline. Start the FastAPI server first.")
-    else:
-        payload = {
-            "LIMIT_BAL": LIMIT_BAL, "AGE": AGE,
-            "PAY_0": pay_options[PAY_0],
-            "PAY_2": pay_options[PAY_2],
-            "PAY_3": pay_options[PAY_3],
-            "BILL_AMT1": BILL_AMT1, "BILL_AMT2": BILL_AMT2,
-            "PAY_AMT1": PAY_AMT1, "PAY_AMT2": PAY_AMT2
-        }
-        with st.spinner("Analysing..."):
-            try:
-                res = requests.post(f"{API_URL}/predict", json=payload, timeout=10).json()
-                risk = res["risk"]
-                prob = res["probability_of_default"]
-                pred = res["prediction"]
+    row = pd.DataFrame([{
+        "LIMIT_BAL": LIMIT_BAL, "AGE": AGE,
+        "PAY_0": pay_options[PAY_0],
+        "PAY_2": pay_options[PAY_2],
+        "PAY_3": pay_options[PAY_3],
+        "BILL_AMT1": BILL_AMT1, "BILL_AMT2": BILL_AMT2,
+        "PAY_AMT1": PAY_AMT1, "PAY_AMT2": PAY_AMT2
+    }])[FEATURES]
 
-                if risk == "HIGH":
-                    st.markdown(f"""
-                    <div class="result-high">
-                        <div class="result-label">Default Risk</div>
-                        <div class="result-risk-high">⚠ HIGH RISK</div>
-                        <div class="result-prob">Probability of Default: <strong>{prob:.1%}</strong></div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div class="result-low">
-                        <div class="result-label">Default Risk</div>
-                        <div class="result-risk-low">✓ LOW RISK</div>
-                        <div class="result-prob">Probability of Default: <strong>{prob:.1%}</strong></div>
-                    </div>
-                    """, unsafe_allow_html=True)
+    with st.spinner("Analysing..."):
+        try:
+            scaled = scaler.transform(row)
+            prob = model.predict_proba(scaled)[0][1]
+            pred = 1 if prob >= THRESHOLD else 0
+            risk = "HIGH" if pred == 1 else "LOW"
 
-                st.markdown("<br>", unsafe_allow_html=True)
-                m1, m2, m3 = st.columns(3)
-                with m1:
-                    st.markdown(f'<div class="metric-card"><div class="metric-label">Prediction</div><div class="metric-value">{"Default" if pred==1 else "No Default"}</div></div>', unsafe_allow_html=True)
-                with m2:
-                    st.markdown(f'<div class="metric-card"><div class="metric-label">Probability</div><div class="metric-value">{prob:.1%}</div></div>', unsafe_allow_html=True)
-                with m3:
-                    st.markdown(f'<div class="metric-card"><div class="metric-label">Risk Level</div><div class="metric-value">{risk}</div></div>', unsafe_allow_html=True)
+            if risk == "HIGH":
+                st.markdown(f"""
+                <div class="result-high">
+                    <div class="result-label">Default Risk</div>
+                    <div class="result-risk-high">⚠ HIGH RISK</div>
+                    <div class="result-prob">Probability of Default: <strong>{prob:.1%}</strong></div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="result-low">
+                    <div class="result-label">Default Risk</div>
+                    <div class="result-risk-low">✓ LOW RISK</div>
+                    <div class="result-prob">Probability of Default: <strong>{prob:.1%}</strong></div>
+                </div>
+                """, unsafe_allow_html=True)
 
-            except Exception as e:
-                st.error(f"Prediction failed: {e}")
+            st.markdown("<br>", unsafe_allow_html=True)
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Prediction</div><div class="metric-value">{"Default" if pred==1 else "No Default"}</div></div>', unsafe_allow_html=True)
+            with m2:
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Probability</div><div class="metric-value">{prob:.1%}</div></div>', unsafe_allow_html=True)
+            with m3:
+                st.markdown(f'<div class="metric-card"><div class="metric-label">Risk Level</div><div class="metric-value">{risk}</div></div>', unsafe_allow_html=True)
+
+        except Exception as e:
+            st.error(f"Prediction failed: {e}")
 else:
     st.markdown("""
-    <div class="card" style="text-align:center; padding:3rem 2rem; color:#555;">
+    <div style="text-align:center; padding:3rem 2rem; color:#555; background:#1a1d26; border:1px solid #2a2d3a; border-radius:12px;">
         <div style="font-size:3rem;">📊</div>
         <div style="margin-top:1rem; font-size:1.1rem;">Fill in client details above and click<br><strong style="color:#7c3aed;">Run Risk Assessment</strong></div>
     </div>
